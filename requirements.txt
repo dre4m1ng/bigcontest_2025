@@ -1,12 +1,15 @@
+numpy
 streamlit
 pandas
+tabulate
 python-dotenv
 tavily-python
+charset-normalizer
 
 # LangChain 패키지 (가상 환경용 최종 검증 버전)
-langchain==0.2.6
-langchain-core==0.2.10
-langchain-community==0.2.6
-langgraph==0.1.4
+langchain==0.2.10
+langchain-core==0.2.23
+langchain-community==0.2.10
+langgraph==0.1.6
 langchain-openai==0.1.9
 langchain-experimental==0.0.62
