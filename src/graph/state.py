@@ -1,13 +1,21 @@
-from typing import List, Annotated, TypedDict
+# src/graph/state.py
+
+from typing import List, TypedDict, Annotated
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 
 class AgentState(TypedDict):
     """
-    Agent들이 공유하는 상태
-    - messages: 대화 기록 (덮어쓰는 대신 계속 추가되도록 Annotated 사용)
-    - next: 다음에 호출할 Agent의 이름
+    Plan-and-Execute 모델을 위한 새로운 상태 정의
     """
-    # messages의 타입 힌트를 수정하여 메시지가 누적되도록 합니다.
+    # 기존 대화 기록
     messages: Annotated[list, add_messages]
+    
+    # Planner가 생성한 앞으로 해야 할 일들의 목록
+    plan: List[str]
+    
+    # Executor가 실행한 단계와 그 결과 (수집된 근거 자료)
+    past_steps: List[tuple]
+    
+    # 다음으로 실행할 노드의 이름 (조건부 엣지에서 사용)
     next: str

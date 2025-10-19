@@ -1,4 +1,4 @@
-# src/main_app.py의 최종 완성본
+# src/main_app.py
 
 import streamlit as st
 from langchain_core.messages import HumanMessage, AIMessage
@@ -27,7 +27,6 @@ for msg in st.session_state.messages:
 
 # --- 사용자 입력 처리 ---
 if prompt := st.chat_input("질문을 입력하세요..."):
-    # (핵심 수정!) 사용자의 입력을 HumanMessage(name='user')로 명확하게 생성합니다.
     user_message = HumanMessage(content=prompt, name='user')
     st.session_state.messages.append(user_message)
     with st.chat_message("user"):
@@ -36,40 +35,41 @@ if prompt := st.chat_input("질문을 입력하세요..."):
     with st.chat_message("assistant"):
         message_placeholder = st.empty()
         full_response = ""
-        agent_used = "N/A"
-        status_message = ""
-
-        # (핵심 수정!) 그래프에 전달할 입력값에도 name='user'가 포함된 메시지를 사용합니다.
+        
         inputs = {"messages": [user_message]}
-        config = {
-            "configurable": {"thread_id": st.session_state.thread_id},
-            "recursion_limit": 5
-        }
+        config = {"configurable": {"thread_id": st.session_state.thread_id}}
+
+        # Planner가 세운 계획을 표시할 변수
+        plan_steps_str = ""
+        # 실행된 단계를 표시할 변수
+        executed_steps_str = ""
 
         for chunk in graph.stream(inputs, config=config):
-            if "web_searcher" in chunk:
-                agent_used = "web_searcher"
-                status_message = "🔍 웹에서 최신 정보를 검색하고 있습니다..."
-            elif "data_analyzer" in chunk:
-                agent_used = "data_analyzer"
-                status_message = "📊 데이터를 분석하고 있습니다. 잠시만 기다려주세요..."
-            elif "api_caller" in chunk:
-                agent_used = "api_caller"
-                status_message = "📞 정책자금 정보를 조회하고 있습니다..."
+            # planner가 계획을 세우면 화면에 표시
+            if "planner" in chunk:
+                plan = chunk["planner"].get("plan", [])
+                plan_steps_str = "\n".join([f"⏳ {step}" for step in plan])
+                message_placeholder.markdown(f"**수립된 작업 계획:**\n{plan_steps_str}")
 
-            if "generate" in chunk:
-                generated_messages = chunk["generate"].get("messages", [])
-                if generated_messages and isinstance(generated_messages[-1], AIMessage):
-                    full_response = generated_messages[-1].content
-
-            if full_response:
-                message_placeholder.markdown(full_response + "▌")
-            elif status_message:
-                message_placeholder.markdown(status_message)
-
+            # executor가 단계를 실행하면 화면 업데이트
+            if "executor" in chunk:
+                past_steps = chunk["executor"].get("past_steps", [])
+                executed_steps_str = "\n".join([f"✅ {step[0]}" for step in past_steps])
+                remaining_plan = "\n".join([f"⏳ {step}" for step in chunk["executor"].get("plan", [])])
+                message_placeholder.markdown(f"**작업 수행 현황:**\n{executed_steps_str}\n{remaining_plan}")
+            
+            # synthesizer가 최종 답변을 생성하면 표시
+            if "synthesizer" in chunk:
+                final_message = chunk["synthesizer"]["messages"][-1]
+                if isinstance(final_message, AIMessage):
+                    full_response = final_message.content
+                    message_placeholder.markdown(full_response)
+        
         message_placeholder.markdown(full_response)
 
     if full_response:
         ai_message = AIMessage(content=full_response)
-        st.session_state.messages.append(ai_message) # 최종 답변만 세션에 추가
-        log_to_csv(user_input=prompt, ai_output=full_response, agent_used=agent_used)
+        st.session_state.messages.append(ai_message)
+        # 로깅은 이제 계획 단계, 근거 등을 포함하도록 확장할 수 있습니다.
+        # 지금은 간단하게 마지막 도구 이름만 기록합니다.
+        log_to_csv(user_input=prompt, ai_output=full_response, agent_used="Plan-and-Execute")

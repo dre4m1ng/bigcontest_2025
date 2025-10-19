@@ -1,142 +1,152 @@
-import os
-from dotenv import load_dotenv
+# src/graph/builder.py
+
+from langchain_core.messages import AIMessage
+from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-from langchain_openai import ChatOpenAI
+from dotenv import load_dotenv
 
-# .env 파일에서 API 키 로드
-load_dotenv()
-
-# 모듈화된 Agent 함수들을 가져옵니다.
-from agents.web_search_agent import web_search_agent
-from agents.data_analysis_agent import data_analysis_agent
-from agents.api_call_agent import api_call_agent
+# 새로운 상태와 우리가 만든 모든 '도구(Tool)'들을 가져옵니다.
 from graph.state import AgentState
+from tools.data_analysis_tool import data_analysis_tool
+from tools.web_search_tool import web_search_tool
+from tools.api_call_tool import api_caller_tool
 
 # LLM 초기화
+load_dotenv() # .env 파일에서 API 환경 변수 로드
 llm = ChatOpenAI(model="gpt-4-turbo", temperature=0)
 
-# --- 1. Router 역할을 할 LLM 프롬프트 ---
-router_prompt = """
-당신은 입력된 텍스트에서 키워드를 찾아 작업을 분류하는 매우 단순한 로봇 분류기입니다.
-당신의 유일한 임무는 아래 [IF-ELSE 조건문]을 순서대로 확인하고, 가장 먼저 일치하는 단 하나의 작업을 선택하는 것입니다. 절대 문장의 의미를 해석하거나 추론하지 마십시오.
+# --- 1. 도구(Tool) 등록 ---
+# 모든 도구를 이름과 함께 딕셔너리로 묶어 Executor가 쉽게 찾아 쓸 수 있도록 합니다.
+tools = {
+    "data_analyzer": data_analysis_tool,
+    "web_searcher": web_search_tool,
+    "api_caller": api_caller_tool,
+}
 
-**[IF-ELSE 조건문]**
+# --- 2. 챗봇의 새로운 두뇌: 노드(Node) 정의 ---
 
-1.  **IF** 입력 텍스트에 다음 키워드 중 **하나라도 포함**되어 있는가?
-    - '분석'
-    - '파일'
-    - '데이터'
-    - 'CSV'
-    - '데이터_레이아웃'
-    - 'big_data_set'  (뒤에 숫자가 붙어도 포함)
-    -> **THEN** 당신의 결정은 **`data_analyzer`** 이다. (여기서 즉시 중단)
+def planner_node(state: AgentState):
+    """사용자의 질문을 기반으로 '가장 효율적인' 실행 계획을 수립합니다."""
+    print("--- 🤔 계획 수립(Planner) 시작 ---")
+    
+    prompt = f"""당신은 사용자의 질문을 해결하기 위한 '가장 효율적인' 실행 계획을 수립하는 전문 플래너입니다.
+당신의 최우선 목표는 각 도구(tool)가 단 한 번의 호출로 작업을 완료할 수 있도록, **가능한 가장 짧고 간결한 계획**을 세우는 것입니다.
 
-2.  **ELSE IF** 입력 텍스트에 다음 키워드 중 하나라도 포함되어 있는가?
-    - '뉴스'
-    - '트렌드'
-    - '검색'
-    -> **THEN** 당신의 결정은 **`web_searcher`** 이다. (여기서 즉시 중단)
+**[매우 중요한 규칙]**
+- 사용자의 질문이 하나의 도구로 해결될 수 있다면, 계획은 **반드시 단 하나의 단계**여야 합니다.
+- 절대 하나의 작업을 여러 개의 자잘한 단계로 나누지 마세요.
 
-3.  **ELSE IF** 입력 텍스트에 다음 키워드 중 하나라도 포함되어 있는가?
-    - '정책자금'
-    - '대출'
-    - '지원금'
-    -> **THEN** 당신의 결정은 **`api_caller`** 이다. (여기서 즉시 중단)
+**[예시]**
+- **나쁜 계획 (절대 이렇게 하지 마세요):**
+  1. [Tool: data_analyzer] 파일을 읽어줘.
+  2. [Tool: data_analyzer] '상권_코드_명' 컬럼을 찾아줘.
+  3. [Tool: data_analyzer] 그룹별로 개수를 세줘.
+- **좋은 계획 (반드시 이렇게 하세요):**
+  1. [Tool: data_analyzer] 'big_data_set1_f.csv' 파일에서 '상권_코드_명' 별로 데이터 개수를 계산해서 상위 5개만 알려줘.
 
-4.  **ELSE** (위 1, 2, 3번 조건에 단 하나도 해당하지 않는 모든 경우)
-    -> **THEN** 당신의 결정은 **`generate`** 이다.
+**사용 가능한 도구:**
+- **data_analyzer**: CSV, Excel 파일의 내용을 분석합니다.
+- **web_searcher**: 최신 트렌드, 뉴스 등을 웹에서 검색합니다.
+- **api_caller**: '정책자금', '대출' 등 금융 상품 정보를 조회합니다.
 
-**[입력 텍스트]**
-"{query}"
+**사용자 질문:** "{state['messages'][-1].content}"
 
-**[당신의 결정 (위 조건문에 따라 결정된 단 하나의 작업)]**
+**가장 효율적인 실행 계획 (위 규칙과 예시를 반드시 참고):**
+"""
+    
+    response = llm.invoke(prompt)
+    plan = [step.strip() for step in response.content.split('\n') if step.strip()]
+    
+    print(f"--- 📝 수립된 계획 ---\n" + "\n".join(plan))
+    return {"plan": plan, "past_steps": []}
+
+def executor_node(state: AgentState):
+    """계획의 다음 단계를 실행하는 '실행 전문가'"""
+    print("--- ⚙️ 계획 실행(Executor) 시작 ---")
+    
+    step = state["plan"][0]
+    
+    try:
+        tool_name = step.split("[Tool: ")[1].split("]")[0]
+        query = step.split("]")[1].strip()
+    except IndexError:
+        return {"past_steps": state.get("past_steps", []) + [(step, "오류: 계획 형식이 잘못되었습니다.")]}
+
+    print(f"---  [실행] 도구: {tool_name} // 질문: {query} ---")
+    
+    if tool_name in tools:
+        tool = tools[tool_name]
+        try:
+            result = tool.invoke(query)
+            past_step = (step, str(result))
+        except Exception as e:
+            # (핵심 수정!) 잡힌 오류의 내용을 터미널에 자세히 출력합니다.
+            print(f"--- 🚨 EXECUTOR가 도구 실행 중 오류 감지: {e} ---") 
+            past_step = (step, f"도구 실행 중 오류 발생: {e}")
+            
+        return {
+            "plan": state["plan"][1:],
+            "past_steps": state.get("past_steps", []) + [past_step]
+        }
+    else:
+        return {"past_steps": state.get("past_steps", []) + [(step, "오류: 알 수 없는 도구입니다.")]}
+
+def synthesizer_node(state: AgentState):
+    """수집된 모든 근거를 종합하여 최종 답변을 생성하는 '종합 전문가'"""
+    print("--- ✍️ 결과 종합(Synthesizer) 시작 ---")
+
+    # past_steps에 저장된 모든 근거 자료를 하나의 텍스트로 합칩니다.
+    evidence = "\n\n".join(
+        [f"**실행 계획:** {step}\n**수집된 근거:**\n{result}" for step, result in state.get("past_steps", [])]
+    )
+    
+    prompt = f"""당신은 수집된 근거 자료만을 사용하여 사용자의 초기 질문에 대한 최종 답변을 생성하는 전문 분석가입니다.
+절대로 당신의 기존 지식을 사용해서는 안 됩니다. 답변은 반드시 한국어로 작성해야 합니다.
+
+**[사용자의 초기 질문]**
+{state['messages'][0].content}
+
+**[수집된 근거 자료]**
+{evidence}
+
+**[최종 답변]**
+위 근거 자료를 바탕으로, 각 내용의 출처(예: [근거: big_data_set1.csv 분석 결과], [근거: 웹 검색 결과])를 명시하여 최종 답변을 생성해주세요.
 """
 
-# --- 2. 최종 답변 생성 역할을 할 LLM 프롬프트 ---
-generation_prompt = """당신은 소상공인을 위한 전문 AI 상담가입니다.
-지금까지의 대화 내용과 Agent가 찾아온 정보를 종합하여, 사용자의 질문에 대한 최종 답변을 친절하고 명확하게 생성해주세요.
+    response = llm.invoke(prompt)
+    return {"messages": [AIMessage(content=response.content)]}
 
-[대화 내용 및 정보]
-{messages}
+# --- 3. 새로운 그래프 구성 ---
 
-[최종 답변]
-"""
-
-def router_node(state):
-    """
-    메시지 출처를 확인하여, Agent의 보고는 즉시 generate로 보내고,
-    사용자의 신규 요청만 LLM에게 판단을 맡깁니다.
-    """
-    print("--- 🧑‍⚖️ Router(Supervisor) 실행 ---")
-    
-    messages = state["messages"]
-    last_message = messages[-1]
-
-    # 1. (핵심!) 메시지 출처가 Agent인지 먼저 확인합니다.
-    # HumanMessage이지만, 이름이 'user'가 아니라면 Agent가 만든 메시지입니다.
-    if isinstance(last_message, HumanMessage) and last_message.name != "user":
-        print(f"--- ✅ '{last_message.name}' Agent 작업 완료. 최종 답변 생성으로 직행합니다. ---")
-        # LLM에게 물어볼 필요 없이, 즉시 'generate' 노드로 가는 지름길을 택합니다.
-        return {"next": "generate"}
-
-    # 2. 위 조건에 해당하지 않는 경우 (즉, 사용자의 최초 질문인 경우)에만 LLM을 호출하여 판단합니다.
-    valid_destinations = ["data_analyzer", "web_searcher", "api_caller", "generate"]
-
-    prompt = router_prompt.format(query=last_message.content)
-    raw_decision = llm.invoke(prompt).content.strip()
-    print(f"--- [DEBUG] LLM 원본 출력: '{raw_decision}' ---")
-
-    cleaned_decision = ""
-    for node_name in valid_destinations:
-        if node_name in raw_decision:
-            cleaned_decision = node_name
-            break
-    
-    if not cleaned_decision:
-        print(f"--- [경고] '{raw_decision}'에서 유효한 노드를 찾을 수 없습니다. 'generate'로 기본 설정합니다. ---")
-        cleaned_decision = "generate"
-    
-    print(f"--- Router의 최종 정제된 결정: '{cleaned_decision}' ---")
-    return {"next": cleaned_decision}
-
-def generation_node(state):
-    print("--- 💬 최종 답변 생성 ---")
-    messages = state["messages"]
-    
-    message_str = "\n".join([f"{msg.type}: {msg.content}" for msg in messages])
-    prompt = generation_prompt.format(messages=message_str)
-    final_response = llm.invoke(prompt).content.strip()
-    
-    return {"messages": [AIMessage(content=final_response)]}
-
-# --- 3. 그래프 구성 ---
 workflow = StateGraph(AgentState)
 
-workflow.add_node("router", router_node)
-workflow.add_node("web_searcher", web_search_agent)
-workflow.add_node("data_analyzer", data_analysis_agent)
-workflow.add_node("api_caller", api_call_agent)
-workflow.add_node("generate", generation_node) # 답변 생성 노드
+# 새로운 전문가 노드들을 그래프에 추가
+workflow.add_node("planner", planner_node)
+workflow.add_node("executor", executor_node)
+workflow.add_node("synthesizer", synthesizer_node)
 
-workflow.set_entry_point("router") # 시작 노드 설정
+# 시작점은 항상 'planner'
+workflow.set_entry_point("planner")
 
-workflow.add_conditional_edges(
-    "router",
-    lambda x: x["next"],
-    {
-        "web_searcher": "web_searcher",
-        "data_analyzer": "data_analyzer",
-        "api_caller": "api_caller",
-        "generate": "generate",
-    },
-)
+# 각 노드를 연결
+workflow.add_edge("planner", "executor")
+workflow.add_edge("synthesizer", END)
 
-workflow.add_edge("generate", END)
-workflow.add_edge("web_searcher", "router")
-workflow.add_edge("data_analyzer", "router")
-workflow.add_edge("api_caller", "router")
+# Executor는 조건부로 연결: 실행할 계획이 남았는지 확인
+def should_continue(state: AgentState):
+    if state.get("plan"):
+        return "executor" # 아직 실행할 계획이 남았으면 executor로 다시 이동 (루프)
+    else:
+        return "synthesizer" # 계획이 모두 끝났으면 synthesizer로 이동
 
+workflow.add_conditional_edges("executor", should_continue)
+
+# 그래프 최종 컴파일
 graph = workflow.compile(checkpointer=MemorySaver())
-print("✅ LangGraph가 최종 구조로 성공적으로 컴파일되었습니다!")
+print("=========================================//")
+print("✅ '계획-실행-종합' 모델로 LangGraph가 성공적으로 컴파일되었습니다!")
+# print(">> 그래프 노드:", graph.nodes)
+print(">> 그래프 도구 목록:", list(tools.keys()))
+print("=========================================")
+print("시작 >>")
