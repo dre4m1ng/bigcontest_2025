@@ -13,12 +13,8 @@ tabulate
 python-dotenv
 tavily-python
 charset-normalizer
-<<<<<<< HEAD
 openpyxl
 
-=======
-#파이썬 버전 3.10
->>>>>>> 43268e36fbde13a81fce585efb0007491a87ffa7
 # LangChain 패키지 (가상 환경용 최종 검증 버전)
 langchain==0.2.10
 langchain-core==0.2.23
