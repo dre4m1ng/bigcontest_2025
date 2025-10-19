@@ -11,6 +11,7 @@ from graph.state import AgentState
 from tools.data_analysis_tool import data_analysis_tool
 from tools.web_search_tool import web_search_tool
 from tools.api_call_tool import api_caller_tool
+from tools.marketing_idea_tool import marketing_idea_generator_tool
 
 # LLM 초기화
 load_dotenv() # .env 파일에서 API 환경 변수 로드
@@ -22,43 +23,48 @@ tools = {
     "data_analyzer": data_analysis_tool,
     "web_searcher": web_search_tool,
     "api_caller": api_caller_tool,
+    "marketing_idea_generator": marketing_idea_generator_tool,
 }
 
 # --- 2. 챗봇의 새로운 두뇌: 노드(Node) 정의 ---
 
 def planner_node(state: AgentState):
-    """사용자의 질문을 기반으로 '가장 효율적인' 실행 계획을 수립합니다."""
-    print("--- 🤔 계획 수립(Planner) 시작 ---")
+    """사용자의 비즈니스 문제를 해결하기 위한 '실행 가능한 계획'만을 생성합니다."""
+    print("--- 🤔 최고 전략 책임자(Planner) 활동 시작 ---")
     
-    prompt = f"""당신은 사용자의 질문을 해결하기 위한 '가장 효율적인' 실행 계획을 수립하는 전문 플래너입니다.
-당신의 최우선 목표는 각 도구(tool)가 단 한 번의 호출로 작업을 완료할 수 있도록, **가능한 가장 짧고 간결한 계획**을 세우는 것입니다.
+    prompt = f"""당신은 사용자의 요청을 해결하기 위한, 실행 가능한 단계별 계획을 생성하는 AI 플래너입니다.
 
-**[매우 중요한 규칙]**
-- 사용자의 질문이 하나의 도구로 해결될 수 있다면, 계획은 **반드시 단 하나의 단계**여야 합니다.
-- 절대 하나의 작업을 여러 개의 자잘한 단계로 나누지 마세요.
+**[매우 중요한 출력 규칙]**
+- 당신의 최종 출력물은 **오직 번호가 매겨진 실행 계획 목록**이어야 합니다.
+- 각 줄은 **반드시 `[Tool: 도구이름]` 형식으로 시작**해야 합니다.
+- **절대로** 서론, 문제 정의, 가설, 요약 등 다른 어떤 설명도 포함해서는 안 됩니다. 오직 실행 계획 목록만 출력하세요.
 
 **[예시]**
-- **나쁜 계획 (절대 이렇게 하지 마세요):**
-  1. [Tool: data_analyzer] 파일을 읽어줘.
-  2. [Tool: data_analyzer] '상권_코드_명' 컬럼을 찾아줘.
-  3. [Tool: data_analyzer] 그룹별로 개수를 세줘.
-- **좋은 계획 (반드시 이렇게 하세요):**
-  1. [Tool: data_analyzer] 'big_data_set1_f.csv' 파일에서 '상권_코드_명' 별로 데이터 개수를 계산해서 상위 5개만 알려줘.
+- **요청**: "재방문율 30% 이하 매장의 재방문율을 높일 마케팅 아이디어를 줘."
+- **올바른 출력 (반드시 이 형식으로!):**
+  1. [Tool: data_analyzer] 재방문 고객과 첫 방문 고객의 특성(방문 요일, 시간대, 주문 메뉴, 결제 금액)을 비교 분석하여 차이점을 찾아줘.
+  2. [Tool: web_searcher] '카페 재방문율 높이는 최신 마케팅 전략'을 검색해서 성공 사례 3가지를 요약해줘.
+  3. [Tool: marketing_idea_generator] 위 1, 2번의 분석 결과와 성공 사례를 바탕으로, 해당 매장을 위한 구체적인 마케팅 아이디어 3가지를 근거와 함께 제시해줘.
 
 **사용 가능한 도구:**
-- **data_analyzer**: CSV, Excel 파일의 내용을 분석합니다.
-- **web_searcher**: 최신 트렌드, 뉴스 등을 웹에서 검색합니다.
-- **api_caller**: '정책자금', '대출' 등 금융 상품 정보를 조회합니다.
+- **data_analyzer**: 데이터 파일(고객 특성, 매출 등)을 심층 분석합니다.
+- **web_searcher**: 최신 트렌드, 경쟁사 정보 등을 검색합니다.
+- **marketing_idea_generator**: 분석된 데이터와 트렌드를 바탕으로 마케팅 아이디어를 생성합니다.
 
-**사용자 질문:** "{state['messages'][-1].content}"
+**사용자 요청:** "{state['messages'][-1].content}"
 
-**가장 효율적인 실행 계획 (위 규칙과 예시를 반드시 참고):**
+**위 규칙과 예시에 따라, 오직 실행 계획 목록만 생성해주세요:**
 """
     
     response = llm.invoke(prompt)
-    plan = [step.strip() for step in response.content.split('\n') if step.strip()]
     
-    print(f"--- 📝 수립된 계획 ---\n" + "\n".join(plan))
+    # (핵심 수정!) LLM의 출력물에서 '[Tool:'로 시작하는 줄만 '계획'으로 인정합니다.
+    plan = [
+        step.strip() for step in response.content.split('\n') 
+        if step.strip() and '[Tool:' in step
+    ]
+    
+    print(f"--- 📝 수립된 최종 계획 ---\n" + "\n".join(plan))
     return {"plan": plan, "past_steps": []}
 
 def executor_node(state: AgentState):
@@ -93,16 +99,15 @@ def executor_node(state: AgentState):
         return {"past_steps": state.get("past_steps", []) + [(step, "오류: 알 수 없는 도구입니다.")]}
 
 def synthesizer_node(state: AgentState):
-    """수집된 모든 근거를 종합하여 최종 답변을 생성하는 '종합 전문가'"""
-    print("--- ✍️ 결과 종합(Synthesizer) 시작 ---")
+    """모든 근거를 종합하여 전문 컨설팅 리포트 형식의 최종 답변을 생성합니다."""
+    print("--- ✍️ 시니어 컨설턴트(Synthesizer) 최종 보고서 작성 ---")
 
-    # past_steps에 저장된 모든 근거 자료를 하나의 텍스트로 합칩니다.
     evidence = "\n\n".join(
         [f"**실행 계획:** {step}\n**수집된 근거:**\n{result}" for step, result in state.get("past_steps", [])]
     )
     
-    prompt = f"""당신은 수집된 근거 자료만을 사용하여 사용자의 초기 질문에 대한 최종 답변을 생성하는 전문 분석가입니다.
-절대로 당신의 기존 지식을 사용해서는 안 됩니다. 답변은 반드시 한국어로 작성해야 합니다.
+    prompt = f"""당신은 수집된 모든 근거 자료를 종합하여, 소상공인을 위한 최종 비즈니스 컨설팅 보고서를 작성하는 시니어 컨설턴트입니다.
+답변은 아래의 **[보고서 형식]**을 반드시 따라야 하며, 모든 내용은 제공된 **[수집된 근거 자료]**에 기반해야 합니다.
 
 **[사용자의 초기 질문]**
 {state['messages'][0].content}
@@ -110,8 +115,20 @@ def synthesizer_node(state: AgentState):
 **[수집된 근거 자료]**
 {evidence}
 
-**[최종 답변]**
-위 근거 자료를 바탕으로, 각 내용의 출처(예: [근거: big_data_set1.csv 분석 결과], [근거: 웹 검색 결과])를 명시하여 최종 답변을 생성해주세요.
+**[보고서 형식]**
+### 📝 문제점 진단
+(데이터 분석 결과를 바탕으로 현재 상황과 가장 큰 문제점을 요약합니다.)
+
+### 💡 해결 방안 제안
+(마케팅 아이디어 생성 결과를 바탕으로, 구체적인 해결책과 실행 방안을 제시합니다.)
+
+### 📈 기대 효과
+(제시한 해결 방안을 실행했을 때 예상되는 긍정적인 결과를 설명합니다.)
+
+### 📚 핵심 근거 자료
+(답변의 각 부분이 어떤 근거 자료(예: [근거: big_data_set1.csv 분석 결과], [근거: 마케팅 아이디어 생성 결과])에 기반했는지 명확히 명시합니다.)
+
+**위 형식에 맞춰 최종 컨설팅 보고서를 작성해주세요:**
 """
 
     response = llm.invoke(prompt)
